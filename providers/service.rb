@@ -21,6 +21,8 @@ require 'chef/mixin/command'
 require 'chef/mixin/language'
 include Chef::Mixin::Command
 
+BLUEPILL_STATE_FORMAT = /\w+\(pid:\d*\): (\w+)/
+
 action :enable do
   config_file = "#{node['bluepill']['conf_dir']}/#{new_resource.service_name}.pill"
 
@@ -93,8 +95,10 @@ def load_current_resource
   Chef::Log.debug("Checking status of service #{new_resource.service_name}")
 
   begin
-    if run_command_with_systems_locale(:command => "#{node['bluepill']['bin']} #{new_resource.service_name} status") == 0
+    if bluepill_state == "up"
       @bp.running(true)
+    else
+      @bp.running(false)
     end
   rescue Chef::Exceptions::Exec
     @bp.running(false)
@@ -105,5 +109,20 @@ def load_current_resource
     @bp.enabled(true)
   else
     @bp.enabled(false)
+  end
+end
+
+
+def bluepill_state
+  command = "#{node['bluepill']['bin']} #{new_resource.service_name} status"
+  status = popen4(command) do |pid, stdin, stdout, stderr|
+    stdout.each_line do |line|
+      # rsyslog stop/waiting
+      # service goal/state
+      # OR
+      # rsyslog (stop) waiting
+      # service (goal) state
+      return line[BLUEPILL_STATE_FORMAT, 1]
+    end
   end
 end
