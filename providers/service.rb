@@ -20,6 +20,7 @@
 require 'chef/mixin/command'
 require 'chef/mixin/language'
 include Chef::Mixin::Command
+include Chef::Mixin::ShellOut
 
 BLUEPILL_STATE_FORMAT = /\w+\(pid:\d*\): (\w+)/
 
@@ -88,22 +89,19 @@ action :restart do
   end
 end
 
+action :reload do
+  shell_out "#{node['bluepill']['bin']} #{new_resource.service_name} stop"
+  100.times { |i| sleep 0.1 if bp_running? }
+  Chef::Log.error "Failed to stop #{new_resource.service_name}. Will try to continue with reload." if bp_running?
+  shell_out "#{node['bluepill']['bin']} load #{node['bluepill']['conf_dir']}/#{new_resource.service_name}.pill"
+  shell_out "#{node['bluepill']['bin']} #{new_resource.service_name} start"
+end
+
 def load_current_resource
   @bp = Chef::Resource::BluepillService.new(new_resource.name)
   @bp.service_name(new_resource.service_name)
 
-  Chef::Log.debug("Checking status of service #{new_resource.service_name}")
-
-  begin
-    if bluepill_state == "up"
-      @bp.running(true)
-    else
-      @bp.running(false)
-    end
-  rescue Chef::Exceptions::Exec
-    @bp.running(false)
-    nil
-  end
+  @bp.running(bp_running?)
 
   if ::File.exists?("#{node['bluepill']['conf_dir']}/#{new_resource.service_name}.pill") && ::File.symlink?("#{node['bluepill']['init_dir']}/#{new_resource.service_name}")
     @bp.enabled(true)
@@ -112,16 +110,20 @@ def load_current_resource
   end
 end
 
+def bp_running?
+  begin
+    bluepill_state == "up"
+  rescue Chef::Exceptions::Exec
+    false
+  end
+end
 
 def bluepill_state
+  Chef::Log.debug("Checking status of service #{new_resource.service_name}")
+
   command = "#{node['bluepill']['bin']} #{new_resource.service_name} status"
   status = popen4(command) do |pid, stdin, stdout, stderr|
     stdout.each_line do |line|
-      # rsyslog stop/waiting
-      # service goal/state
-      # OR
-      # rsyslog (stop) waiting
-      # service (goal) state
       return line[BLUEPILL_STATE_FORMAT, 1]
     end
   end
